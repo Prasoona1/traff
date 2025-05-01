@@ -1,777 +1,455 @@
 import streamlit as st
 import requests
 import folium
-import pandas as pd
-import numpy as np
 import polyline
-import json
-import time
-import datetime
-import base64
-import hashlib
-import hmac
-import os
 from streamlit_folium import folium_static
-from folium.plugins import HeatMap
-import plotly.express as px
-import plotly.graph_objects as go
+import json
+import pandas as pd
+from datetime import datetime
+import random
+import time
 
 # Set page configuration
 st.set_page_config(
     page_title="MobiSync Platform",
-    page_icon="🚦",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    page_icon="🚗",
+    layout="wide"
 )
 
-# Custom CSS
-st.markdown("""
-<style>
-    .title {
-        font-size: 2.5rem;
-        font-weight: bold;
-        color: #1E88E5;
-        text-align: center;
-        margin-bottom: 1.5rem;
-    }
-    .subtitle {
-        font-size: 1.5rem;
-        font-weight: 500;
-        color: #424242;
-        margin-bottom: 1rem;
-    }
-    .card {
-        padding: 1.5rem;
-        border-radius: 0.5rem;
-        background-color: #f8f9fa;
-        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-        margin-bottom: 1rem;
-    }
-    .metric-container {
-        display: flex;
-        justify-content: space-between;
-        flex-wrap: wrap;
-        gap: 1rem;
-        margin-bottom: 1.5rem;
-    }
-    .metric-card {
-        background-color: white;
-        border-radius: 0.5rem;
-        padding: 1rem;
-        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-        text-align: center;
-        flex: 1;
-        min-width: 150px;
-    }
-    .metric-value {
-        font-size: 1.8rem;
-        font-weight: bold;
-        margin: 0.5rem 0;
-    }
-    .metric-label {
-        color: #666;
-        font-size: 0.9rem;
-    }
-    .btn-primary {
-        background-color: #1E88E5;
-        color: white;
-        border: none;
-        border-radius: 0.25rem;
-        padding: 0.5rem 1rem;
-        font-size: 1rem;
-        cursor: pointer;
-    }
-    .btn-secondary {
-        background-color: #78909C;
-        color: white;
-        border: none;
-        border-radius: 0.25rem;
-        padding: 0.5rem 1rem;
-        font-size: 1rem;
-        cursor: pointer;
-    }
-    .footer {
-        text-align: center;
-        color: #666;
-        margin-top: 2rem;
-        padding-top: 1rem;
-        border-top: 1px solid #eee;
-    }
-    .success-alert {
-        padding: 1rem;
-        background-color: #d4edda;
-        color: #155724;
-        border-radius: 0.25rem;
-        margin-bottom: 1rem;
-    }
-    .warning-alert {
-        padding: 1rem;
-        background-color: #fff3cd;
-        color: #856404;
-        border-radius: 0.25rem;
-        margin-bottom: 1rem;
-    }
-    .error-alert {
-        padding: 1rem;
-        background-color: #f8d7da;
-        color: #721c24;
-        border-radius: 0.25rem;
-        margin-bottom: 1rem;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# Constants
-GOOGLE_MAPS_API_KEY = "YOUR_GOOGLE_MAPS_API_KEY_HERE"
-OPENROUTE_API_KEY = "YOUR_OPENROUTE_API_KEY_HERE"
-SECRET_KEY = "MobiSync_Secret_Key_Change_This_In_Production"  # For session management
-
-# In-memory user database (replace with a real database in production)
+# Mock user database (in a real app, you'd use a proper database)
 USERS = {
-    "demo@mobisync.com": {
-        "password_hash": hashlib.sha256("demo123".encode()).hexdigest(),
-        "name": "Demo User"
-    },
-    "admin@mobisync.com": {
-        "password_hash": hashlib.sha256("admin123".encode()).hexdigest(),
-        "name": "Admin User"
-    }
+    "demo": "password",
+    "user": "pass123"
 }
 
-# Initialize session state
+# App state
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
 if 'username' not in st.session_state:
     st.session_state.username = None
-if 'route_data' not in st.session_state:
-    st.session_state.route_data = None
+if 'route_calculated' not in st.session_state:
+    st.session_state.route_calculated = False
 if 'last_search' not in st.session_state:
-    st.session_state.last_search = None
+    st.session_state.last_search = {}
 
-# Authentication functions
-def verify_password(username, password):
-    if username in USERS:
-        password_hash = hashlib.sha256(password.encode()).hexdigest()
-        return password_hash == USERS[username]["password_hash"]
-    return False
+# OpenRouteService API key placeholder
+ORS_API_KEY = "YOUR_OPENROUTESERVICE_API_KEY"  # Replace with your actual API key
 
-def login_user(username, password):
-    if verify_password(username, password):
+# Function to handle login
+def login(username, password):
+    if username in USERS and USERS[username] == password:
         st.session_state.logged_in = True
         st.session_state.username = username
         return True
     return False
 
-def logout_user():
+# Function to handle logout
+def logout():
     st.session_state.logged_in = False
     st.session_state.username = None
-    st.session_state.route_data = None
-    st.session_state.last_search = None
+    st.session_state.route_calculated = False
 
-# Geocoding function (converts address to coordinates)
-def geocode_address(address, api_key=GOOGLE_MAPS_API_KEY):
+# Function to geocode an address using OpenRouteService
+def geocode_address(address):
+    url = f"https://api.openrouteservice.org/geocode/search"
+    params = {
+        "api_key": ORS_API_KEY,
+        "text": address,
+        "size": 1
+    }
     try:
-        # Using Google Maps Geocoding API
-        url = f"https://maps.googleapis.com/maps/api/geocode/json?address={address}&key={api_key}"
-        response = requests.get(url)
-        data = response.json()
-        
-        if data['status'] == 'OK':
-            location = data['results'][0]['geometry']['location']
-            return location['lat'], location['lng']
+        response = requests.get(url, params=params)
+        if response.status_code == 200:
+            data = response.json()
+            if data["features"]:
+                coords = data["features"][0]["geometry"]["coordinates"]
+                return coords  # [lon, lat]
+            else:
+                return None
         else:
-            st.error(f"Geocoding error: {data['status']}")
+            st.error(f"Error in geocoding: {response.status_code}")
             return None
     except Exception as e:
-        st.error(f"Geocoding error: {str(e)}")
+        st.error(f"Error in geocoding: {str(e)}")
         return None
 
-# Route optimization function
-def get_optimized_route(origin_coords, destination_coords, api="google"):
+# Function to get route using OpenRouteService
+def get_route(start_coords, end_coords):
+    url = "https://api.openrouteservice.org/v2/directions/driving-car"
+    headers = {
+        'Authorization': ORS_API_KEY,
+        'Content-Type': 'application/json'
+    }
+    data = {
+        "coordinates": [start_coords, end_coords],
+        "instructions": True,
+        "format": "geojson"
+    }
     try:
-        if api == "google":
-            # Using Google Maps Directions API
-            origin = f"{origin_coords[0]},{origin_coords[1]}"
-            destination = f"{destination_coords[0]},{destination_coords[1]}"
-            url = f"https://maps.googleapis.com/maps/api/directions/json?origin={origin}&destination={destination}&alternatives=true&key={GOOGLE_MAPS_API_KEY}"
-            
-            response = requests.get(url)
-            data = response.json()
-            
-            if data['status'] == 'OK':
-                routes = []
-                for route in data['routes']:
-                    route_info = {
-                        'summary': route['summary'],
-                        'distance': sum(leg['distance']['value'] for leg in route['legs']) / 1000,  # km
-                        'duration': sum(leg['duration']['value'] for leg in route['legs']) / 60,  # minutes
-                        'polyline': route['overview_polyline']['points'],
-                        'steps': []
-                    }
-                    
-                    # Extract step-by-step directions
-                    for leg in route['legs']:
-                        for step in leg['steps']:
-                            route_info['steps'].append({
-                                'instruction': step['html_instructions'],
-                                'distance': step['distance']['text'],
-                                'duration': step['duration']['text']
-                            })
-                    
-                    routes.append(route_info)
-                return routes
-            else:
-                st.error(f"Route optimization error: {data['status']}")
-                return None
-                
-        elif api == "openroute":
-            # Using OpenRouteService API
-            headers = {
-                'Authorization': OPENROUTE_API_KEY,
-                'Content-Type': 'application/json'
-            }
-            
-            body = {
-                "coordinates": [
-                    [origin_coords[1], origin_coords[0]],  # Note: OpenRouteService uses [lon, lat]
-                    [destination_coords[1], destination_coords[0]]
-                ],
-                "instructions": True,
-                "preference": "recommended",
-                "units": "km",
-                "language": "en",
-                "geometry": True,
-                "alternative_routes": {
-                    "target_count": 3,
-                    "weight_factor": 1.5
+        response = requests.post(url, json=data, headers=headers)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            st.error(f"Error in routing: {response.status_code}")
+            # For demo, return mock data if API call fails
+            return generate_mock_route_data(start_coords, end_coords)
+    except Exception as e:
+        st.error(f"Error in routing: {str(e)}")
+        # For demo, return mock data if API call fails
+        return generate_mock_route_data(start_coords, end_coords)
+
+# Function to generate mock route data for demo purposes
+def generate_mock_route_data(start_coords, end_coords):
+    # Create a simple straight line between start and end points
+    num_points = 10
+    route_points = []
+    
+    for i in range(num_points):
+        factor = i / (num_points - 1)
+        lon = start_coords[0] + (end_coords[0] - start_coords[0]) * factor
+        lat = start_coords[1] + (end_coords[1] - start_coords[1]) * factor
+        route_points.append([lon, lat])
+    
+    # Create mock traffic congestion data
+    mock_traffic = []
+    for i in range(num_points - 1):
+        congestion = random.choice(["low", "medium", "high"])
+        mock_traffic.append({
+            "segment": [route_points[i], route_points[i+1]],
+            "congestion": congestion
+        })
+    
+    # Mock route data structure
+    mock_data = {
+        "type": "FeatureCollection",
+        "features": [
+            {
+                "type": "Feature",
+                "properties": {
+                    "segments": [
+                        {
+                            "distance": random.uniform(5000, 15000),
+                            "duration": random.uniform(300, 900),
+                            "steps": [
+                                {
+                                    "distance": random.uniform(500, 2000),
+                                    "duration": random.uniform(60, 180),
+                                    "instruction": f"Mock instruction {i+1}",
+                                    "name": f"Street {i+1}"
+                                } for i in range(5)
+                            ]
+                        }
+                    ],
+                    "summary": {
+                        "distance": random.uniform(5000, 15000),
+                        "duration": random.uniform(300, 900)
+                    },
+                    "traffic": mock_traffic
+                },
+                "geometry": {
+                    "coordinates": route_points,
+                    "type": "LineString"
                 }
             }
-            
-            url = "https://api.openrouteservice.org/v2/directions/driving-car"
-            response = requests.post(url, json=body, headers=headers)
-            data = response.json()
-            
-            if 'routes' in data:
-                routes = []
-                for route in data['routes']:
-                    steps = []
-                    for segment in route['segments']:
-                        for step in segment['steps']:
-                            steps.append({
-                                'instruction': step['instruction'],
-                                'distance': f"{step['distance']} km",
-                                'duration': f"{int(step['duration'] / 60)} mins"
-                            })
-                    
-                    route_info = {
-                        'summary': route['summary']['text'] if 'text' in route['summary'] else "Optimized Route",
-                        'distance': route['summary']['distance'],  # km
-                        'duration': route['summary']['duration'] / 60,  # minutes
-                        'polyline': route['geometry'],  # GeoJSON format
-                        'steps': steps
-                    }
-                    routes.append(route_info)
-                return routes
-            else:
-                st.error(f"Route optimization error: {data.get('error', 'Unknown error')}")
-                return None
-    except Exception as e:
-        st.error(f"Route optimization error: {str(e)}")
-        return None
+        ]
+    }
+    return mock_data
 
-# Generate simulated traffic data for visualization
-def generate_traffic_data(center_lat, center_lng, radius=0.05, n_points=200):
-    np.random.seed(int(time.time()))
+# Function to get mock traffic data (in a real app, you'd integrate with a traffic API)
+def get_traffic_data(route_data):
+    # In a real app, you'd call an actual traffic API here
+    # For this demo, we'll generate random traffic data along the route
     
-    # Generate random points around the center
-    lats = np.random.normal(center_lat, radius, n_points)
-    lngs = np.random.normal(center_lng, radius, n_points)
+    coordinates = route_data["features"][0]["geometry"]["coordinates"]
+    traffic_data = []
     
-    # Generate congestion values (1-10 scale)
-    # Simulate higher congestion near the center and major roads
-    congestion = []
-    for i in range(n_points):
-        # Distance from center (normalized)
-        dist = np.sqrt((lats[i] - center_lat)**2 + (lngs[i] - center_lng)**2) / radius
-        
-        # Base congestion (higher near center)
-        base = max(1, min(10, 10 * (1 - dist * 0.7)))
-        
-        # Add some randomness
-        noise = np.random.normal(0, 1)
-        final_congestion = max(1, min(10, base + noise))
-        congestion.append(final_congestion)
+    # Generate traffic congestion levels for segments of the route
+    for i in range(len(coordinates) - 1):
+        # Random congestion level: low, medium, high
+        congestion = random.choice(["low", "medium", "high"])
+        segment = [coordinates[i], coordinates[i+1]]
+        traffic_data.append({
+            "segment": segment,
+            "congestion": congestion
+        })
     
-    # Create DataFrame
-    df = pd.DataFrame({
-        'lat': lats,
-        'lng': lngs,
-        'congestion': congestion
-    })
-    
-    return df
+    return traffic_data
 
-# Create traffic map with congestion visualization
-def create_traffic_map(route_data, traffic_data=None):
-    # Extract coordinates from the first route
-    if not route_data:
-        return None
-        
-    first_route = route_data[0]
-    if 'polyline' in first_route:
-        # Handle Google Maps polyline format
-        if isinstance(first_route['polyline'], str):
-            route_coords = polyline.decode(first_route['polyline'])
-        else:
-            # Handle GeoJSON format from OpenRouteService
-            route_coords = []
-            for coord in first_route['polyline']['coordinates']:
-                route_coords.append([coord[1], coord[0]])  # Convert [lng, lat] to [lat, lng]
-    else:
-        return None
+# Function to create a map with route and traffic
+def create_map(route_data, traffic_data):
+    # Extract coordinates from the route
+    coordinates = route_data["features"][0]["geometry"]["coordinates"]
     
-    # Create map centered on the route
-    center_lat = route_coords[len(route_coords)//2][0]
-    center_lng = route_coords[len(route_coords)//2][1]
+    # Find the center of the route for the map
+    center_lat = sum(coord[1] for coord in coordinates) / len(coordinates)
+    center_lon = sum(coord[0] for coord in coordinates) / len(coordinates)
     
-    m = folium.Map(location=[center_lat, center_lng], zoom_start=12, tiles="CartoDB positron")
+    # Create a map
+    m = folium.Map(location=[center_lat, center_lon], zoom_start=10)
     
-    # Draw route polyline
-    folium.PolyLine(
-        route_coords,
-        color='blue',
-        weight=5,
-        opacity=0.7
-    ).add_to(m)
-    
-    # Add markers for start and end points
+    # Add start and end markers
     folium.Marker(
-        route_coords[0],
+        [coordinates[0][1], coordinates[0][0]],
         popup="Start",
-        icon=folium.Icon(color='green', icon='play')
+        icon=folium.Icon(color="green", icon="play")
     ).add_to(m)
     
     folium.Marker(
-        route_coords[-1],
-        popup="Destination",
-        icon=folium.Icon(color='red', icon='stop')
+        [coordinates[-1][1], coordinates[-1][0]],
+        popup="End",
+        icon=folium.Icon(color="red", icon="stop")
     ).add_to(m)
-    
-    # If no traffic data is provided, generate some
-    if traffic_data is None:
-        traffic_data = generate_traffic_data(center_lat, center_lng)
     
     # Add traffic congestion visualization
-    heat_data = []
-    for _, row in traffic_data.iterrows():
-        # Weight by congestion level (1-10)
-        weight = row['congestion'] / 2  # Scale down for better visualization
-        heat_data.append([row['lat'], row['lng'], weight])
-    
-    # Add heat map layer
-    HeatMap(
-        heat_data,
-        radius=15,
-        gradient={
-            0.2: 'green',
-            0.5: 'yellow',
-            0.8: 'orange',
-            1.0: 'red'
-        }
-    ).add_to(m)
+    for segment in traffic_data:
+        coords = segment["segment"]
+        congestion = segment["congestion"]
+        
+        # Set color based on congestion level
+        if congestion == "low":
+            color = "green"
+        elif congestion == "medium":
+            color = "orange"
+        else:  # high
+            color = "red"
+        
+        # Add line segment with appropriate color
+        folium.PolyLine(
+            [[coords[0][1], coords[0][0]], [coords[1][1], coords[1][0]]],
+            color=color,
+            weight=5,
+            opacity=0.8,
+            tooltip=f"Traffic: {congestion.capitalize()}"
+        ).add_to(m)
     
     return m
 
-# Function to display route details
-def display_route_details(route_data):
-    if not route_data:
-        return
-    
-    # Display tabs for different routes
-    route_tabs = st.tabs([f"Route {i+1}: {route['summary']}" for i, route in enumerate(route_data)])
-    
-    for i, tab in enumerate(route_tabs):
-        route = route_data[i]
-        with tab:
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("Distance", f"{route['distance']:.1f} km")
-            with col2:
-                st.metric("Duration", f"{route['duration']:.1f} mins")
-            with col3:
-                # Calculate estimated arrival
-                now = datetime.datetime.now()
-                arrival = now + datetime.timedelta(minutes=route['duration'])
-                st.metric("Est. Arrival", arrival.strftime("%H:%M"))
-            
-            st.subheader("Directions")
-            for j, step in enumerate(route['steps']):
-                st.markdown(f"**{j+1}.** {step['instruction'].replace('<b>', '**').replace('</b>', '**')} ({step['distance']})")
+# Function to parse directions from route data
+def get_directions(route_data):
+    try:
+        segments = route_data["features"][0]["properties"]["segments"]
+        directions = []
+        
+        for segment in segments:
+            for step in segment["steps"]:
+                directions.append({
+                    "instruction": step["instruction"],
+                    "distance": f"{step['distance']/1000:.2f} km",
+                    "duration": f"{step['duration']/60:.1f} min"
+                })
+        
+        return directions
+    except Exception as e:
+        # For demo purposes, return mock directions if parsing fails
+        return [
+            {"instruction": "Continue straight", "distance": "1.50 km", "duration": "5.0 min"},
+            {"instruction": "Turn right onto Main Street", "distance": "0.80 km", "duration": "3.5 min"},
+            {"instruction": "Turn left at the roundabout", "distance": "2.30 km", "duration": "7.2 min"},
+            {"instruction": "Merge onto Highway", "distance": "5.40 km", "duration": "12.8 min"},
+            {"instruction": "Take exit 42", "distance": "0.60 km", "duration": "1.5 min"},
+            {"instruction": "Arrive at destination", "distance": "0.10 km", "duration": "0.5 min"}
+        ]
 
-# Search history function
-def add_to_search_history(origin, destination, route_data):
-    if 'search_history' not in st.session_state:
-        st.session_state.search_history = []
-    
-    # Add to history
-    st.session_state.search_history.append({
-        'timestamp': datetime.datetime.now(),
-        'origin': origin,
-        'destination': destination,
-        'route_summary': route_data[0]['summary'] if route_data else "Unknown",
-        'distance': route_data[0]['distance'] if route_data else 0,
-        'duration': route_data[0]['duration'] if route_data else 0
-    })
-    
-    # Keep only the last 10 entries
-    if len(st.session_state.search_history) > 10:
-        st.session_state.search_history = st.session_state.search_history[-10:]
+# Function to get route summary
+def get_route_summary(route_data):
+    try:
+        summary = route_data["features"][0]["properties"]["summary"]
+        return {
+            "distance": f"{summary['distance']/1000:.2f} km",
+            "duration": f"{summary['duration']/60:.1f} min"
+        }
+    except Exception as e:
+        # For demo purposes, return mock summary if parsing fails
+        return {
+            "distance": "10.70 km",
+            "duration": "30.5 min"
+        }
 
-# Function to display metrics
-def display_metrics(route_data, traffic_data):
-    st.markdown("<div class='metric-container'>", unsafe_allow_html=True)
-    
-    # Average congestion (1-10 scale)
-    avg_congestion = traffic_data['congestion'].mean()
-    col_class = "success" if avg_congestion < 4 else "warning" if avg_congestion < 7 else "error"
-    st.markdown(f"""
-    <div class='metric-card'>
-        <div class='metric-label'>Avg. Congestion</div>
-        <div class='metric-value' style='color: {"green" if avg_congestion < 4 else "orange" if avg_congestion < 7 else "red"}'>{avg_congestion:.1f}/10</div>
-    </div>
+# Main application
+def main():
+    # Custom CSS
+    st.markdown("""
+    <style>
+    .main-header {
+        font-size: 2.5rem;
+        color: #2c3e50;
+        text-align: center;
+        margin-bottom: 1rem;
+    }
+    .sub-header {
+        font-size: 1.5rem;
+        color: #34495e;
+        margin-bottom: 1rem;
+    }
+    .info-box {
+        background-color: #f8f9fa;
+        padding: 15px;
+        border-radius: 5px;
+        margin-bottom: 15px;
+    }
+    .success-message {
+        color: #28a745;
+        font-weight: bold;
+    }
+    .traffic-legend {
+        display: flex;
+        justify-content: center;
+        margin: 10px 0;
+    }
+    .traffic-legend-item {
+        display: flex;
+        align-items: center;
+        margin: 0 10px;
+    }
+    .legend-color {
+        width: 20px;
+        height: 10px;
+        margin-right: 5px;
+    }
+    </style>
     """, unsafe_allow_html=True)
     
-    # Best route details
-    if route_data:
-        best_route = min(route_data, key=lambda x: x['duration'])
-        
-        # Distance
-        st.markdown(f"""
-        <div class='metric-card'>
-            <div class='metric-label'>Best Route Distance</div>
-            <div class='metric-value'>{best_route['distance']:.1f} km</div>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Duration
-        st.markdown(f"""
-        <div class='metric-card'>
-            <div class='metric-label'>Best Route Time</div>
-            <div class='metric-value'>{best_route['duration']:.1f} min</div>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Calculate time savings compared to longest route
-        longest_route = max(route_data, key=lambda x: x['duration'])
-        time_saved = longest_route['duration'] - best_route['duration']
-        
-        st.markdown(f"""
-        <div class='metric-card'>
-            <div class='metric-label'>Time Saved</div>
-            <div class='metric-value' style='color: green'>{time_saved:.1f} min</div>
-        </div>
-        """, unsafe_allow_html=True)
+    # Header
+    st.markdown("<h1 class='main-header'>🚗 MobiSync Platform</h1>", unsafe_allow_html=True)
     
-    st.markdown("</div>", unsafe_allow_html=True)
-
-# Main App Logic
-def main():
-    st.markdown('<p class="title">🚦 MobiSync Platform</p>', unsafe_allow_html=True)
-    
-    # Sidebar navigation
-    with st.sidebar:
-        st.image("https://via.placeholder.com/200x80?text=MobiSync+Logo", use_column_width=True)
+    # Login section
+    if not st.session_state.logged_in:
+        st.markdown("<h2 class='sub-header'>Login</h2>", unsafe_allow_html=True)
         
-        if st.session_state.logged_in:
-            st.markdown(f"**Welcome, {USERS[st.session_state.username]['name']}!**")
-            
-            nav_options = ["Route Planner", "Traffic Visualization", "Search History", "Settings"]
-            page = st.radio("Navigation", nav_options)
-            
-            if st.button("Logout"):
-                logout_user()
-                st.experimental_rerun()
-        else:
-            page = "Login"
-    
-    # Login page
-    if page == "Login":
-        st.markdown('<p class="subtitle">Login to MobiSync</p>', unsafe_allow_html=True)
+        col1, col2 = st.columns([1, 1])
         
-        with st.container():
-            st.markdown('<div class="card">', unsafe_allow_html=True)
+        with col1:
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
+            login_button = st.button("Login")
             
-            email = st.text_input("Email Address", placeholder="Enter your email")
-            password = st.text_input("Password", type="password", placeholder="Enter your password")
-            
-            col1, col2 = st.columns([1, 1])
-            with col1:
-                if st.button("Login", use_container_width=True):
-                    if login_user(email, password):
-                        st.success("Login successful! Redirecting...")
-                        time.sleep(1)
-                        st.experimental_rerun()
-                    else:
-                        st.error("Invalid email or password.")
-            
-            with col2:
-                if st.button("Demo Login", use_container_width=True):
-                    if login_user("demo@mobisync.com", "demo123"):
-                        st.success("Demo login successful! Redirecting...")
-                        time.sleep(1)
-                        st.experimental_rerun()
-            
+            if login_button:
+                if login(username, password):
+                    st.success(f"Welcome, {username}!")
+                    st.experimental_rerun()
+                else:
+                    st.error("Invalid username or password. Try demo/password")
+        
+        with col2:
+            st.markdown("<div class='info-box'>", unsafe_allow_html=True)
+            st.markdown("### Demo Credentials")
+            st.markdown("Username: `demo`")
+            st.markdown("Password: `password`")
             st.markdown("</div>", unsafe_allow_html=True)
+    
+    # Main app content for logged-in users
+    else:
+        # Sidebar with user info and logout
+        with st.sidebar:
+            st.markdown(f"### Logged in as: {st.session_state.username}")
+            if st.button("Logout"):
+                logout()
+                st.experimental_rerun()
             
+            st.markdown("---")
+            st.markdown("### Traffic Legend")
             st.markdown("""
-            <div style="text-align: center; margin-top: 1rem;">
-                <p>Demo Credentials:</p>
-                <p><strong>Email:</strong> demo@mobisync.com | <strong>Password:</strong> demo123</p>
+            <div class='traffic-legend'>
+                <div class='traffic-legend-item'>
+                    <div class='legend-color' style='background-color: green;'></div>
+                    <span>Low</span>
+                </div>
+                <div class='traffic-legend-item'>
+                    <div class='legend-color' style='background-color: orange;'></div>
+                    <span>Medium</span>
+                </div>
+                <div class='traffic-legend-item'>
+                    <div class='legend-color' style='background-color: red;'></div>
+                    <span>High</span>
+                </div>
             </div>
             """, unsafe_allow_html=True)
-    
-    # Route Planner page
-    elif page == "Route Planner":
-        st.markdown('<p class="subtitle">Smart Route Planner</p>', unsafe_allow_html=True)
         
-        with st.container():
-            st.markdown('<div class="card">', unsafe_allow_html=True)
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                origin = st.text_input("Starting Point", 
-                                      value=st.session_state.get('last_origin', ''),
-                                      placeholder="Enter starting location")
-            
-            with col2:
-                destination = st.text_input("Destination", 
-                                           value=st.session_state.get('last_destination', ''),
-                                           placeholder="Enter destination")
-            
-            col1, col2, col3 = st.columns([1, 1, 1])
-            
-            with col1:
-                avoid_tolls = st.checkbox("Avoid Tolls")
-            
-            with col2:
-                avoid_highways = st.checkbox("Avoid Highways")
-            
-            with col3:
-                api_choice = st.radio("API Provider", ["Google Maps", "OpenRouteService"], horizontal=True)
-            
-            if st.button("Find Route", use_container_width=True):
-                with st.spinner("Finding optimal route..."):
-                    # Save search info
-                    st.session_state.last_origin = origin
-                    st.session_state.last_destination = destination
-                    
-                    # Geocode addresses
-                    origin_coords = geocode_address(origin)
-                    destination_coords = geocode_address(destination)
-                    
-                    if origin_coords and destination_coords:
-                        # Get route data
-                        api = "google" if api_choice == "Google Maps" else "openroute"
-                        route_data = get_optimized_route(origin_coords, destination_coords, api)
-                        
-                        if route_data:
-                            st.session_state.route_data = route_data
-                            st.session_state.last_search = {
-                                'origin': origin,
-                                'destination': destination
-                            }
-                            
-                            # Add to search history
-                            add_to_search_history(origin, destination, route_data)
-                            
-                            # Success message
-                            st.success("Route found successfully!")
-                        else:
-                            st.error("Could not find a route between these locations.")
-                    else:
-                        st.error("Could not find one or both locations. Please check the addresses.")
-            
-            st.markdown("</div>", unsafe_allow_html=True)
+        # Main content
+        st.markdown("<h2 class='sub-header'>Route Planner</h2>", unsafe_allow_html=True)
         
-        # Display route results if available
-        if st.session_state.route_data:
-            route_data = st.session_state.route_data
-            
-            # Generate traffic data around the route
-            first_route = route_data[0]
-            if 'polyline' in first_route:
-                if isinstance(first_route['polyline'], str):
-                    route_coords = polyline.decode(first_route['polyline'])
-                else:
-                    # Handle GeoJSON format
-                    route_coords = [[coord[1], coord[0]] for coord in first_route['polyline']['coordinates']]
-                
-                center_lat = route_coords[len(route_coords)//2][0]
-                center_lng = route_coords[len(route_coords)//2][1]
-                traffic_data = generate_traffic_data(center_lat, center_lng)
-                
-                # Display metrics
-                display_metrics(route_data, traffic_data)
-                
-                # Create and display map
-                st.subheader("Route Map with Traffic")
-                map_obj = create_traffic_map(route_data, traffic_data)
-                if map_obj:
-                    folium_static(map_obj, width=1000, height=500)
-                
-                # Display directions
-                st.subheader("Route Details")
-                display_route_details(route_data)
-                
-                # Congestion analysis
-                st.subheader("Traffic Congestion Analysis")
-                
-                # Create a chart showing congestion levels along the route
-                distance_points = np.linspace(0, first_route['distance'], 20)
-                congestion_points = []
-                
-                for i, dist in enumerate(distance_points):
-                    # Simulate congestion at different points of the route
-                    # Higher at the beginning and end (urban areas)
-                    if i < len(distance_points) * 0.2 or i > len(distance_points) * 0.8:
-                        base_congestion = np.random.uniform(6, 9)
-                    else:
-                        base_congestion = np.random.uniform(2, 5)
-                    
-                    congestion_points.append(base_congestion)
-                
-                # Create congestion chart
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(
-                    x=distance_points,
-                    y=congestion_points,
-                    mode='lines+markers',
-                    name='Congestion Level',
-                    line=dict(color='red', width=2),
-                    marker=dict(size=8)
-                ))
-                
-                fig.update_layout(
-                    title="Congestion Level Along Route",
-                    xaxis_title="Distance (km)",
-                    yaxis_title="Congestion Level (1-10)",
-                    yaxis=dict(range=[0, 10]),
-                    height=400
-                )
-                
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # Traffic analysis explanation
-                col1, col2 = st.columns([2, 1])
-                with col1:
-                    st.markdown("""
-                    ### Traffic Analysis
-                    
-                    The traffic analysis above shows congestion levels along your route. Key observations:
-                    
-                    - **Beginning and end of route**: Higher congestion levels (typical for urban areas)
-                    - **Middle sections**: Lower congestion levels (typically highway or less congested areas)
-                    - **Overall traffic conditions**: The route has an average congestion level of 
-                      """+f"**{traffic_data['congestion'].mean():.1f}**"+""" out of 10.
-                    
-                    MobiSync analyzes real-time and historical traffic data to provide you with the most efficient route.
-                    """)
-                
-                with col2:
-                    # Traffic rating
-                    avg_congestion = traffic_data['congestion'].mean()
-                    rating_color = "green" if avg_congestion < 4 else "orange" if avg_congestion < 7 else "red"
-                    rating_text = "Good" if avg_congestion < 4 else "Moderate" if avg_congestion < 7 else "Heavy"
-                    
-                    st.markdown(f"""
-                    <div style="background-color: #f8f9fa; padding: 1rem; border-radius: 0.5rem; text-align: center;">
-                        <h4>Traffic Rating</h4>
-                        <div style="font-size: 2.5rem; font-weight: bold; color: {rating_color};">
-                            {rating_text}
-                        </div>
-                        <div style="font-size: 1.5rem; color: {rating_color};">
-                            {avg_congestion:.1f}/10
-                        </div>
-                    </div>
-                    """, unsafe_allow_html=True)
-    
-    # Traffic Visualization page
-    elif page == "Traffic Visualization":
-        st.markdown('<p class="subtitle">Traffic Visualization</p>', unsafe_allow_html=True)
+        # Route input form
+        col1, col2 = st.columns([1, 1])
         
-        with st.container():
-            st.markdown('<div class="card">', unsafe_allow_html=True)
-            
-            visualization_type = st.radio(
-                "Select Visualization Type",
-                ["Live Traffic Map", "Congestion Heatmap", "Traffic Patterns"],
-                horizontal=True
-            )
-            
-            if st.session_state.route_data:
-                # Use the last route for visualization
-                route_data = st.session_state.route_data
-                first_route = route_data[0]
-                
-                if 'polyline' in first_route:
-                    if isinstance(first_route['polyline'], str):
-                        route_coords = polyline.decode(first_route['polyline'])
-                    else:
-                        # Handle GeoJSON format
-                        route_coords = [[coord[1], coord[0]] for coord in first_route['polyline']['coordinates']]
-                    
-                    center_lat = route_coords[len(route_coords)//2][0]
-                    center_lng = route_coords[len(route_coords)//2][1]
-                else:
-                    # Fallback to default coordinates
-                    center_lat, center_lng = 40.7128, -74.0060  # NYC
-            else:
-                # Default to NYC if no route data
-                center_lat, center_lng = 40.7128, -74.0060
-                route_data = None
-            
-            # Generate traffic data
-            traffic_data = generate_traffic_data(center_lat, center_lng, radius=0.05, n_points=300)
-            
-            st.markdown("</div>", unsafe_allow_html=True)
+        with col1:
+            source = st.text_input("Starting Point", "New York, NY")
         
-        if visualization_type == "Live Traffic Map":
-            st.subheader("Live Traffic Map")
-            
-            # Create map
-            if route_data:
-                map_obj = create_traffic_map(route_data, traffic_data)
-            else:
-                # Create a map centered on the default location without a route
-                m = folium.Map(location=[center_lat, center_lng], zoom_start=12, tiles="CartoDB positron")
+        with col2:
+            destination = st.text_input("Destination", "Boston, MA")
+        
+        if st.button("Calculate Route"):
+            with st.spinner("Calculating optimal route..."):
+                # Geocode source and destination
+                source_coords = geocode_address(source)
+                dest_coords = geocode_address(destination)
                 
-                # Add heat map layer
-                heat_data = []
-                for _, row in traffic_data.iterrows():
-                    heat_data.append([row['lat'], row['lng'], row['congestion'] / 2])
-                
-                HeatMap(
-                    heat_data,
-                    radius=15,
-                    gradient={
-                        0.2: 'green',
-                        0.5: 'yellow',
-                        0.8: 'orange',
-                        1.0: 'red'
+                if source_coords and dest_coords:
+                    # Get route data
+                    route_data = get_route(source_coords, dest_coords)
+                    
+                    # Get traffic data
+                    traffic_data = get_traffic_data(route_data)
+                    
+                    # Store in session state
+                    st.session_state.route_calculated = True
+                    st.session_state.last_search = {
+                        "source": source,
+                        "destination": destination,
+                        "route_data": route_data,
+                        "traffic_data": traffic_data,
+                        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                     }
-                ).add_to(m)
-                
-                map_obj = m
+                    
+                    st.success("Route calculated successfully!")
+                    time.sleep(1)  # Small delay for better UX
+                    st.experimental_rerun()
+                else:
+                    st.error("Could not geocode one or both addresses. Please check your input.")
+        
+        # Display route if calculated
+        if st.session_state.route_calculated:
+            st.markdown("---")
+            st.markdown("<h2 class='sub-header'>Route Information</h2>", unsafe_allow_html=True)
             
-            folium_static(map_obj, width=1000, height=600)
+            route_data = st.session_state.last_search["route_data"]
+            traffic_data = st.session_state.last_search["traffic_data"]
             
-            # Legend
-st.markdown("""
-    <div style="display: flex; justify-content: center; gap: 2rem; margin-top: 1rem;">
-        <div><span style="background-color: green; width: 15px; height: 15px; display: inline-block; border-radius: 50%;"></span> Low Congestion</div>
-        <div><span style="background-color: yellow; width: 15px; height: 15px; display: inline-block; border-radius: 50%;"></span> Moderate Congestion</div>
-        <div><span style="background-color: red; width: 15px; height: 15px; display: inline-block; border-radius: 50%;"></span> High Congestion</div>
-    </div>
-""", unsafe_allow_html=True)
+            # Route summary
+            summary = get_route_summary(route_data)
+            
+            st.markdown(f"""
+            <div class='info-box'>
+                <h3>Journey Details</h3>
+                <p><strong>From:</strong> {st.session_state.last_search['source']}</p>
+                <p><strong>To:</strong> {st.session_state.last_search['destination']}</p>
+                <p><strong>Total Distance:</strong> {summary['distance']}</p>
+                <p><strong>Estimated Time:</strong> {summary['duration']}</p>
+                <p><strong>Last Updated:</strong> {st.session_state.last_search['timestamp']}</p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Create and display map
+            st.markdown("<h3>Route Map with Traffic Conditions</h3>", unsafe_allow_html=True)
+            m = create_map(route_data, traffic_data)
+            folium_static(m, width=800, height=500)
+            
+            # Display directions
+            st.markdown("<h3>Turn-by-Turn Directions</h3>", unsafe_allow_html=True)
+            directions = get_directions(route_data)
+            
+            directions_df = pd.DataFrame(directions)
+            st.table(directions_df)
+            
+            # Add refresh button
+            if st.button("Refresh Traffic Data"):
+                with st.spinner("Updating traffic information..."):
+                    # Update traffic data only
+                    updated_traffic = get_traffic_data(route_data)
+                    st.session_state.last_search["traffic_data"] = updated_traffic
+                    st.session_state.last_search["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    st.success("Traffic data updated!")
+                    time.sleep(1)  # Small delay for better UX
+                    st.experimental_rerun()
 
+if __name__ == "__main__":
+    main()
