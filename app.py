@@ -767,7 +767,11 @@ def main():
             folium_static(map_obj, width=1000, height=600)
             
             # Legend
-            st.markdown("""
-            <div style="display: flex; justify-content: center; gap: 2rem; margin-top: 1rem;">
-                <div><span style="background-color: green; width: 15px; height: 15px; display: inline-block; border-radius: 50%;"></span> Low Congestion</div>
-                <div><span style="background-color: yellow; width
+st.markdown("""
+    <div style="display: flex; justify-content: center; gap: 2rem; margin-top: 1rem;">
+        <div><span style="background-color: green; width: 15px; height: 15px; display: inline-block; border-radius: 50%;"></span> Low Congestion</div>
+        <div><span style="background-color: yellow; width: 15px; height: 15px; display: inline-block; border-radius: 50%;"></span> Moderate Congestion</div>
+        <div><span style="background-color: red; width: 15px; height: 15px; display: inline-block; border-radius: 50%;"></span> High Congestion</div>
+    </div>
+""", unsafe_allow_html=True)
+
