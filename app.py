@@ -8,6 +8,7 @@ import pandas as pd
 from datetime import datetime
 import random
 import time
+import googlemaps
 
 # Set page configuration
 st.set_page_config(
@@ -32,8 +33,11 @@ if 'route_calculated' not in st.session_state:
 if 'last_search' not in st.session_state:
     st.session_state.last_search = {}
 
-# OpenRouteService API key placeholder
-ORS_API_KEY = "YOUR_OPENROUTESERVICE_API_KEY"  # Replace with your actual API key
+# Google Maps API key
+GOOGLE_MAPS_API_KEY = "YOUR_GOOGLE_MAPS_API_KEY"  # Replace with your actual API key
+
+# Initialize Google Maps client
+gmaps = googlemaps.Client(key=GOOGLE_MAPS_API_KEY)
 
 # Function to handle login
 def login(username, password):
@@ -49,53 +53,102 @@ def logout():
     st.session_state.username = None
     st.session_state.route_calculated = False
 
-# Function to geocode an address using OpenRouteService
+# Function to geocode an address using Google Maps API
 def geocode_address(address):
-    url = f"https://api.openrouteservice.org/geocode/search"
-    params = {
-        "api_key": ORS_API_KEY,
-        "text": address,
-        "size": 1
-    }
     try:
-        response = requests.get(url, params=params)
-        if response.status_code == 200:
-            data = response.json()
-            if data["features"]:
-                coords = data["features"][0]["geometry"]["coordinates"]
-                return coords  # [lon, lat]
-            else:
-                return None
+        # Geocoding API request
+        geocode_result = gmaps.geocode(address)
+        
+        if geocode_result:
+            location = geocode_result[0]['geometry']['location']
+            # Google Maps returns {lat, lng} but we need [lng, lat] for folium
+            return [location['lng'], location['lat']]
         else:
-            st.error(f"Error in geocoding: {response.status_code}")
             return None
     except Exception as e:
         st.error(f"Error in geocoding: {str(e)}")
         return None
 
-# Function to get route using OpenRouteService
+# Function to get route using Google Maps Directions API
 def get_route(start_coords, end_coords):
-    url = "https://api.openrouteservice.org/v2/directions/driving-car"
-    headers = {
-        'Authorization': ORS_API_KEY,
-        'Content-Type': 'application/json'
-    }
-    data = {
-        "coordinates": [start_coords, end_coords],
-        "instructions": True,
-        "format": "geojson"
-    }
     try:
-        response = requests.post(url, json=data, headers=headers)
-        if response.status_code == 200:
-            return response.json()
+        # Convert coords from [lng, lat] to (lat, lng) format for Google Maps
+        origin = (start_coords[1], start_coords[0])
+        destination = (end_coords[1], end_coords[0])
+        
+        # Get directions from Google Maps
+        directions_result = gmaps.directions(
+            origin,
+            destination,
+            mode="driving",
+            alternatives=False
+        )
+        
+        if directions_result:
+            # Convert Google Maps response to our expected format
+            return convert_gmaps_to_route_data(directions_result, start_coords, end_coords)
         else:
-            st.error(f"Error in routing: {response.status_code}")
+            st.error("No route found.")
             # For demo, return mock data if API call fails
             return generate_mock_route_data(start_coords, end_coords)
     except Exception as e:
         st.error(f"Error in routing: {str(e)}")
         # For demo, return mock data if API call fails
+        return generate_mock_route_data(start_coords, end_coords)
+
+# Function to convert Google Maps directions to our route data format
+def convert_gmaps_to_route_data(directions_result, start_coords, end_coords):
+    try:
+        route = directions_result[0]
+        
+        # Extract polyline from the route
+        polyline_str = route['overview_polyline']['points']
+        # Decode polyline to get coordinates list [[lat, lng], [lat, lng], ...]
+        coords_list = polyline.decode(polyline_str)
+        # Convert from [[lat, lng], ...] to [[lng, lat], ...] for our format
+        coordinates = [[point[1], point[0]] for point in coords_list]
+        
+        # Extract steps for directions
+        steps = []
+        for leg in route['legs']:
+            for step in leg['steps']:
+                steps.append({
+                    "distance": step['distance']['value'],
+                    "duration": step['duration']['value'],
+                    "instruction": step['html_instructions'].replace('<b>', '').replace('</b>', '').replace('<div>', ', ').replace('</div>', ''),
+                    "name": step.get('street_name', 'Unknown Street')
+                })
+        
+        # Create route data structure compatible with our app
+        route_data = {
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "properties": {
+                        "segments": [
+                            {
+                                "distance": route['legs'][0]['distance']['value'],
+                                "duration": route['legs'][0]['duration']['value'],
+                                "steps": steps
+                            }
+                        ],
+                        "summary": {
+                            "distance": route['legs'][0]['distance']['value'],
+                            "duration": route['legs'][0]['duration']['value']
+                        },
+                        "traffic": get_traffic_data_for_route(coordinates)
+                    },
+                    "geometry": {
+                        "coordinates": coordinates,
+                        "type": "LineString"
+                    }
+                }
+            ]
+        }
+        return route_data
+    except Exception as e:
+        st.error(f"Error converting Google Maps data: {str(e)}")
         return generate_mock_route_data(start_coords, end_coords)
 
 # Function to generate mock route data for demo purposes
@@ -155,12 +208,11 @@ def generate_mock_route_data(start_coords, end_coords):
     }
     return mock_data
 
-# Function to get mock traffic data (in a real app, you'd integrate with a traffic API)
-def get_traffic_data(route_data):
-    # In a real app, you'd call an actual traffic API here
+# Function to get traffic data from Google Maps (or mock it for demo)
+def get_traffic_data_for_route(coordinates):
+    # In a real app with a premium Google Maps account, you could use the Roads API with traffic data
     # For this demo, we'll generate random traffic data along the route
     
-    coordinates = route_data["features"][0]["geometry"]["coordinates"]
     traffic_data = []
     
     # Generate traffic congestion levels for segments of the route
@@ -174,6 +226,11 @@ def get_traffic_data(route_data):
         })
     
     return traffic_data
+
+# Function to get traffic data (in a real app, you'd integrate with Google's traffic data)
+def get_traffic_data(route_data):
+    coordinates = route_data["features"][0]["geometry"]["coordinates"]
+    return get_traffic_data_for_route(coordinates)
 
 # Function to create a map with route and traffic
 def create_map(route_data, traffic_data):
@@ -364,6 +421,19 @@ def main():
                 </div>
             </div>
             """, unsafe_allow_html=True)
+            
+            # Adding Google Maps API Key configuration
+            st.markdown("---")
+            st.markdown("### API Configuration")
+            google_api_key = st.text_input("Google Maps API Key", value=GOOGLE_MAPS_API_KEY, type="password")
+            if st.button("Update API Key"):
+                if google_api_key != GOOGLE_MAPS_API_KEY:
+                    # In a real app, you'd store this securely
+                    st.session_state.google_api_key = google_api_key
+                    st.success("API key updated!")
+                    # Reinitialize the client with the new key
+                    global gmaps
+                    gmaps = googlemaps.Client(key=google_api_key)
         
         # Main content
         st.markdown("<h2 class='sub-header'>Route Planner</h2>", unsafe_allow_html=True)
