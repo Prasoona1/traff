@@ -270,7 +270,7 @@ if st.button("Find Routes", type="primary"):
         # Display each route with more details
         for i, route in enumerate(routes):
             if i == 0:  # Highlight recommended route
-                card_color = "#e6f7ff"  # Light blue for recommended
+                card_color = "#ee82ee"  # Light blue for recommended
                 recommended_text = "✅ RECOMMENDED"
             else:
                 card_color = "#f9f9f9"
