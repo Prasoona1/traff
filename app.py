@@ -270,15 +270,21 @@ if st.button("Find Routes", type="primary"):
         # Display each route with more details
         for i, route in enumerate(routes):
             if i == 0:  # Highlight recommended route
-                card_color = "#ee82ee"  # Light blue for recommended
+                card_color = "#38b6ff"  # Bright blue for recommended
+                text_color = "white"
                 recommended_text = "✅ RECOMMENDED"
+            elif i == 1:
+                card_color = "#ff5757"  # Bright red
+                text_color = "white"
+                recommended_text = ""
             else:
-                card_color = "#f9f9f9"
+                card_color = "#57e964"  # Bright green
+                text_color = "white"
                 recommended_text = ""
                 
             # Route card
             st.markdown(f"""
-            <div class="route-card" style="background-color: {card_color};">
+            <div class="route-card" style="background-color: {card_color}; color: {text_color};">
                 <h4>{route['name']} {recommended_text}</h4>
                 <p>
                 <strong>Distance:</strong> {route['distance_km']:.1f} km<br>
